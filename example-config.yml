@@ -1,0 +1,8 @@
+SERVER_HOST:   mydomain.org
+SSH_PORT:      1222
+HTTP_PORT:     1280
+HTTPS_PORT:    12443 
+HTTPS_DOMAIN:  "www.mydomain.org"
+EMAIL:         "johndoe@mydomain.org"
+REPLUSER:      "johndoe"
+PASSWDHSH:     "<password hash>"

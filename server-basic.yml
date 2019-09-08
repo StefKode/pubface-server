@@ -1,0 +1,224 @@
+- hosts: host_base
+  remote_user: root
+
+  tasks:
+   - name: Load configuration variables
+     include_vars: config.yml
+
+   - name: Want basic packages
+     apt: name={{item}} state=present update_cache=false
+     with_items:
+       - fail2ban
+       - sudo
+       - vim
+       - screen
+       - nginx
+       - iptables-persistent
+
+   - name: Add the user "{{ REPLUSER }}" 
+     user:
+       name: "{{ REPLUSER }}"
+       group: sudo
+       password: "{{ PASSWDHSH }}"
+       state: present
+       shell: /bin/bash
+       system: no
+       createhome: yes
+
+   - name: Set public key from "{{ REPLUSER }}"
+     authorized_key:
+       user: "{{ REPLUSER }}"
+       state: present
+       key: "{{ lookup('file', '/home/{{ REPLUSER }}/.ssh/id_rsa.pub') }}"
+
+   - name: have a neutral issue.net
+     lineinfile:
+       path: /etc/issue.net
+       regexp: '^.*$'
+       line: 'Welcome'
+
+   - name: have my hostname
+     lineinfile:
+       path: /etc/hostname
+       regexp: '^.*$'
+       line: "{{ SERVER_HOST }}"
+
+   - name: have ssh on "{{ SSH_PORT }}"
+     lineinfile:
+       path: /etc/ssh/sshd_config
+       line: 'Port "{{ SSH_PORT }}"'
+     register: ssh_port_changed
+
+   - name: Reload service sshd
+     service:
+       name: sshd
+       state: reloaded
+
+   - name: have nginx at port "{{ HTTP_PORT }}" ipv4
+     replace:
+       path: /etc/nginx/sites-available/default
+       regexp:  '^[ 	]*listen 80 default_server;$'
+       replace: '       listen {{ HTTP_PORT }} default_server;'
+
+   - name: have nginx at port "{{ HTTP_PORT }}" ipv6
+     replace:
+       path: /etc/nginx/sites-available/default
+       regexp:  '^[ 	]*listen \[::\]:80 default_server;$'
+       replace: '       listen [::]:{{ HTTP_PORT }} default_server;'
+
+   - name: Reload service nginx
+     service:
+       name: nginx
+       state: reloaded
+
+   - name: Ensure US locale exists
+     locale_gen:
+       name: en_US.UTF-8
+       state: present
+
+   - name: Have all sessions in english
+     lineinfile:
+       path: /etc/bash.bashrc
+       line: 'export LANG=en_US.UTF-8'
+
+   - name: have fail2ban jail
+     blockinfile:
+       path: /etc/fail2ban/jail.local
+       create: yes
+       block: |
+           [DEFAULT]
+           bantime=3600
+           [sshd]
+           port     = {{ SSH_PORT }}
+           logpath  = %(sshd_log)s
+           backend  = %(sshd_backend)s
+           maxretry = 3
+
+   - name: have stretch the backport repo available for certbot
+     apt_repository:
+       repo: deb http://deb.debian.org/debian stretch-backports main contrib non-free
+       state: present
+
+   - name: Have certbot package from backports release
+     apt: name={{item}} state=present update_cache=true default_release=stretch-backports
+     with_items:
+       - certbot 
+       - python3-certbot-nginx
+ 
+   - name: chek if we've generated a cert already
+     stat: path="/etc/letsencrypt/live/{{ HTTPS_DOMAIN }}/fullchain.pem"
+     register: lenc_cert_avail
+
+   - name: have the right domain in nginx server block
+     replace:
+       path: /etc/nginx/sites-available/default
+       regexp:  '^[ 	]*server_name _;'
+       replace: '       server_name {{ HTTPS_DOMAIN }};'
+
+   - name: Request/install let's encrypt cert
+     shell: certbot -n --nginx -d "{{ HTTPS_DOMAIN }}" --agree-tos -m "{{ EMAIL }}" --redirect --no-eff-email
+     when: lenc_cert_avail.stat.exists == False
+
+   - name: move nginx https to "{{ HTTPS_PORT }}" / ipv6
+     replace:
+       path: /etc/nginx/sites-available/default
+       regexp:  '^[ 	]*listen 443 ssl; # managed by Certbot'
+       replace: '       listen {{ HTTPS_PORT }} ssl; # managed by Certbot'
+
+   - name: move nginx https to "{{ HTTPS_PORT }}" / ipv6
+     replace:
+       path: /etc/nginx/sites-available/default
+       regexp:  '^[ 	]*listen [::]:443 ssl ipv6only=on; # managed by Certbot'
+       replace: '       listen [::]:{{ HTTPS_PORT }} ssl ipv6only=on; # managed by Certbot'
+
+   - name: Reload service nginx
+     service:
+       name: nginx
+       state: reloaded
+
+   - name: open firewall temporarily for certbot 1/2
+     copy:
+        src: certbot_run 
+        dest: /usr/local/bin/certbot_run
+        owner: root
+        group: root
+        mode: 0755
+
+   - name: open firewall temporarily for certbot 2/2
+     replace:
+       path: /etc/cron.d/certbot
+       regexp:  'certbot -q renew'
+       replace: '/usr/local/bin/certbot_run'
+
+- hosts: host_snew
+  remote_user: root
+  gather_facts: no
+
+  tasks:
+   - name: Load configuration variables
+     include_vars: config.yml
+
+   - name: Wait 600 seconds for target connection to become reachable/usable
+     wait_for_connection:
+
+   - name: Firewall rule - allow port "{{ SSH_PORT }}"/SSH traffic
+     iptables:
+       in_interface: eth0
+       chain: INPUT
+       destination_port: "{{ SSH_PORT }}"
+       jump: ACCEPT
+       protocol: tcp
+
+   - name: Firewall rule - allow port "{{ HTTP_PORT }}"/HTTP traffic
+     iptables:
+       in_interface: eth0
+       chain: INPUT
+       destination_port: "{{ HTTP_PORT }}"
+       jump: ACCEPT
+       protocol: tcp
+
+   - name: Firewall rule - allow port "{{ HTTPS_PORT }}"/HTTPS traffic
+     iptables:
+       in_interface: eth0
+       chain: INPUT
+       destination_port: "{{ HTTPS_PORT }}"
+       jump: ACCEPT
+       protocol: tcp
+
+   - name: Firewall rule - established,related on input chain 
+     iptables:
+       chain: INPUT
+       match: conntrack
+       ctstate: ESTABLISHED,RELATED
+       in_interface: eth0
+       jump: ACCEPT
+
+   - name: Firewall rule - drop all other traffic
+     iptables:
+       chain: INPUT
+       in_interface: eth0
+       jump: DROP
+
+   - name: Save iptables
+     shell: iptables-save > /etc/iptables/rules.v4
+
+   - name: disable ssh root login 1/2
+     lineinfile:
+       path: /etc/ssh/sshd_config
+       line: 'PermitRootLogin yes'
+       state: absent
+
+   - name: disable ssh root login 2/2
+     lineinfile:
+       path: /etc/ssh/sshd_config
+       line: 'PermitRootLogin no' 
+
+   - name: disable ssh password login
+     lineinfile:
+       path: /etc/ssh/sshd_config
+       line: 'PasswordAuthentication no'
+
+   - name: Reload service sshd
+     service:
+       name: sshd
+       state: reloaded

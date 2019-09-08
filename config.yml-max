@@ -1,0 +1,8 @@
+SERVER_HOST:   max.sc-koch.de
+SSH_PORT:      8922
+HTTP_PORT:     89
+HTTPS_PORT:    8443
+HTTPS_DOMAIN:  "max.sc-koch.de"
+EMAIL:         "s-koch@posteo.de"
+REPLUSER:      "stefan"
+PASSWDHSH:     "$6$c8W5fGQU7lJ$/d1YnIdyjRUUwZ6apG5aYpdM6auMTcJGu5kW1rQpDtZb2BGr8BGtJahcE9soSkbR5zvq2TElVTEVbCsOC41Dd1"

@@ -1,0 +1,9 @@
+#!/bin/bash
+
+echo "Update Certificate"
+echo "enable FW"
+/sbin/iptables -I INPUT -i eth0 -p tcp -m tcp --dport 80 -j ACCEPT
+echo "run certbot"
+/usr/bin/certbot -q renew
+echo "disablel FW"
+/sbin/iptables -D INPUT -i eth0 -p tcp -m tcp --dport 80 -j ACCEPT
